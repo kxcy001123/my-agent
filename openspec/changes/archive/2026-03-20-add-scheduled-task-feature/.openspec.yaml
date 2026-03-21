@@ -1,0 +1,5 @@
+name: add-scheduled-task-feature
+description: 飞书自然语言创建定时任务功能
+schema: spec-driven
+status: active
+created: 2026-03-19

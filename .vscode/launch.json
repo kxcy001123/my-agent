@@ -1,0 +1,71 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "NestJS: Debug",
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/**"
+      ],
+      "runtimeArgs": [
+        "--inspect-brk",
+        "-r",
+        "ts-node/register",
+        "-r",
+        "tsconfig-paths/register"
+      ],
+      "args": [
+        "${workspaceFolder}/hello-nest-langchain/src/main.ts"
+      ],
+      "cwd": "${workspaceFolder}/hello-nest-langchain",
+      "console": "integratedTerminal",
+      "env": {
+        "NODE_ENV": "development"
+      },
+      "attachSimplePort": 9229
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "NestJS: Attach to Debug",
+      "port": 9229,
+      "cwd": "${workspaceFolder}/hello-nest-langchain",
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/**"
+      ]
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "NestJS: Start Debug (nest start --debug)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "start:debug"
+      ],
+      "cwd": "${workspaceFolder}/hello-nest-langchain",
+      "console": "integratedTerminal",
+      "attachSimplePort": 9230,
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/**"
+      ],
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "NestJS: Attach to nest start --debug",
+      "port": 9230,
+      "cwd": "${workspaceFolder}/hello-nest-langchain",
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/**"
+      ]
+    }
+  ]
+}
