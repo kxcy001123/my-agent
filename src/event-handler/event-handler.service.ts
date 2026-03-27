@@ -4,6 +4,7 @@ import { PrdReviewService } from '../prd-review/prd-review.service';
 import { AutoTestService } from '../auto-test/auto-test.service';
 import { ScheduledTaskService } from '../scheduled-task/scheduled-task.service';
 import { AiService } from '../ai/ai.service';
+import { NotificationPolicyService } from '../common/notification-policy.service';
 
 @Injectable()
 export class EventHandlerService implements OnModuleInit {
@@ -13,6 +14,7 @@ export class EventHandlerService implements OnModuleInit {
     private readonly autoTestService: AutoTestService,
     private readonly scheduledTaskService: ScheduledTaskService,
     private readonly aiService: AiService,
+    private readonly notificationPolicyService: NotificationPolicyService,
   ) {}
 
   // 模块初始化时注册事件处理器
@@ -26,10 +28,16 @@ export class EventHandlerService implements OnModuleInit {
     chatId: string;
     text: string;
     docUrl?: string;
+    senderId?: string;
+    mentionIds?: string[];
+    mentions?: any[];
+    messageId?: string;
+    parentId?: string;
+    rootId?: string;
   }): Promise<string> {
-    const { type, text, docUrl, chatId } = event;
+    const { type, text, docUrl, chatId, senderId, mentionIds, mentions, messageId, parentId, rootId } = event;
 
-    console.log(`📨 处理事件：type=${type}, text=${text}, docUrl=${docUrl}, chatId=${chatId}`);
+    console.log(`📨 处理事件：type=${type}, text=${text}, docUrl=${docUrl}, chatId=${chatId}, senderId=${senderId}, mentionIds=${mentionIds?.join(', ')}, messageId=${messageId}, parentId=${parentId}, rootId=${rootId}`);
 
     // 检查是否包含测试指令（优先判断）
     if (text.startsWith('测试')) {
@@ -63,7 +71,7 @@ export class EventHandlerService implements OnModuleInit {
 
     // 其他消息交给 AI 处理，让 AI 进行意图识别
     // AI 会自动判断是否需要调用 create_scheduled_task 工具
-    return this.handleWithAI(text, chatId);
+    return this.handleWithAI(text, chatId, senderId, mentionIds, mentions, messageId, parentId, rootId);
   }
 
   // 处理自动化测试功能
@@ -160,19 +168,62 @@ export class EventHandlerService implements OnModuleInit {
   }
 
   // 使用 AI 处理消息（意图识别 + 工具调用）
-  private async handleWithAI(text: string, chatId: string): Promise<string> {
+  private async handleWithAI(text: string, chatId: string, senderId?: string, mentionIds?: string[], mentions?: any[], messageId?: string, parentId?: string, rootId?: string): Promise<string> {
     try {
       // 调用 AI 服务，AI 会自动进行意图识别并调用相应的工具
-      const response = await this.aiService.runChain(text, chatId);
-      // 如果 AI 返回空响应，说明无法处理
-      if (!response || response.trim() === '') {
-        return '抱歉，我无法理解您的需求。您可以：\n- 说"测试"来执行自动化测试\n- 说"评审"来评审 PRD\n- 说"查看定时任务"来管理任务\n- 或者直接描述您想创建的定时任务，如"每天早上 9 点执行自动化测试"';
+      const response = await this.aiService.runChain(text, chatId, senderId, mentionIds, messageId, parentId, rootId);
+      
+      // 规则1: 如果@了本机器人（通过 mentions 中的 name 判断），必须回复
+      const isBotMentioned = this.checkBotMentionedByName(mentions);
+      if (isBotMentioned) {
+        console.log('📢 检测到@机器人，直接发送回复');
+        return response;
       }
       
-      return response;
+      // 规则2: 如果是风险识别场景，发送预警内容（不含标记）
+      const isRiskScenario = this.detectRiskScenario(response);
+      if (isRiskScenario) {
+        console.log('📢 检测到风险场景，发送预警');
+        // 提取预警内容（去掉标记部分）
+        return response;
+      }
+      
+      // 规则3: 其他情况不发送（静默模式）
+      console.log('🤫 普通消息，不发送到群里');
+      return '';
+   
     } catch (err) {
       console.error('AI 处理失败:', err);
       return '抱歉，处理过程中出现错误，请稍后重试。';
     }
+  }
+
+  // 通过机器人名字判断是否@了本机器人
+  private checkBotMentionedByName(mentions?: any[]): boolean {
+    if (!mentions || mentions.length === 0) {
+      return false;
+    }
+    // 机器人名字
+    const botName = 'chenjq 助手';
+    return mentions.some(m => m.name === botName);
+  }
+
+  // 检测是否为风险场景 - 解析 AI 响应中的标记
+  private detectRiskScenario(response: string): boolean {
+    if (!response) {
+      return false;
+    }
+    // 匹配 [风险:TYPE] 格式的标记
+    const riskPattern = /\[风险:(RESOURCE|TIME|DEPENDENCY|QUALITY)\]/i;
+    return riskPattern.test(response);
+  }
+
+  // 提取风险预警内容（去掉标记部分）
+  private extractRiskWarning(response: string): string {
+    if (!response) {
+      return '';
+    }
+    // 移除 [风险:TYPE] 标记，保留后续内容
+    return response.replace(/\[风险:\w+\]\s*/i, '').trim();
   }
 }

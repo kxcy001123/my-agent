@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config'
+import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
+import * as winston from 'winston';
 
 import { CreateAiDto } from './dto/create-ai.dto';
 import { UpdateAiDto } from './dto/update-ai.dto';
@@ -13,7 +14,6 @@ import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts
 import { StringOutputParser } from '@langchain/core/output_parsers'
 
 
-import { tool } from '@langchain/core/tools'
 
 
 import {
@@ -62,16 +62,20 @@ export class AiService {
   private tools: any[];
   private model: ChatOpenAI;
   private modelWithTools: Runnable<any, AIMessage>
-  private readonly logger = new Logger(AiService.name);
+  private readonly logger: Logger;
+  private readonly winstonLogger: winston.Logger;
 
   // 使用 Map 存储每个 chatId 的历史记录
   private chatHistories: Map<string, InMemoryChatMessageHistory> = new Map();
 
   constructor(
+    @Inject(WINSTON_MODULE_PROVIDER) winstonLogger: winston.Logger,
     @Inject('CHAT_MODEL') model: ChatOpenAI,
     @Inject('QUERY_USER_TOOL') private readonly queryUserTool: any,
     @Inject('CREATE_SCHEDULED_TASK_TOOL') private readonly createScheduledTaskTool: any,
   ) {
+    this.winstonLogger = winstonLogger;
+    this.logger = new Logger(AiService.name);
 
     const prompt = ChatPromptTemplate.fromTemplate(`
       请回答以下问题:\n\n{query}
@@ -79,21 +83,31 @@ export class AiService {
     this.model = model;
     this.chain = prompt.pipe(model).pipe(new StringOutputParser());
 
-    this.tools = [this.queryUserTool, this.createScheduledTaskTool]
+    this.tools = [this.createScheduledTaskTool]
     this.modelWithTools = model.bindTools(this.tools);
   }
 
-  async runChain(query: string, chatId?: string): Promise<string> {
+  async runChain(query: string, chatId?: string, senderId?: string, mentionIds?: string[], messageId?: string, parentId?: string, rootId?: string): Promise<string> {
     // 构建 system message
     const systemMessage = new SystemMessage(`你是一个 chenjq 的智能助手，可以在需要时调用工具来完成任务。
+
+## 群聊消息上下文
+
+群聊消息可能包含引用关系，用于理解对话脉络：
+- **当前消息ID**: 当前消息的唯一标识
+- **父消息ID**: 当前消息回复的消息ID（如果存在，表示这是回复某条消息）
+- **根消息ID**: 同一话题链的根消息ID（用于识别对话线程）
+
+利用这些信息可以更好地理解用户的意图，例如：
+- 当看到父消息ID时，说明用户在回复之前的消息
+- 当父消息ID等于根消息ID时，说明这是直接回复话题发起者
+- 当父消息ID不等于根消息ID时，说明这是对话题中某个中间消息的回复
 
 ## 核心角色
 你同时具备以下能力：
 1. **PMO 项目管理助手** - 帮助用户跟踪项目进度、识别风险、创建提醒任务
-2. **日常助手** - 查询用户信息、创建定时任务等
 
 ## 可用工具
-- query_user: 查询用户信息
 - create_scheduled_task: 创建定时任务或延时任务
 
 ---
@@ -110,10 +124,6 @@ export class AiService {
 | BLOCKED (阻塞) | 卡住了、阻塞、等待、依赖、被卡住、无法推进 |
 | DELAYED (延期) | 延期、推迟、来不及、超时、延后 |
 
-识别到进度更新时，请：
-1. 确认你理解的任务状态
-2. 如有阻塞或延期，询问具体原因
-3. 建议是否需要创建跟进提醒
 
 ### 项目风险识别
 当用户描述困难时，请识别以下风险类型：
@@ -122,46 +132,64 @@ export class AiService {
 |---------|-----------|---------|
 | RESOURCE (资源风险) | 人手不够、资源不足、没人做、缺人 | 建议协调资源或调整优先级，是否需要向上级申请支援？ |
 | TIME (时间风险) | 时间不够、来不及、太紧了、赶不上 | 建议评估是否需要延期或削减范围，是否需要沟通调整截止日期？ |
-| DEPENDENCY (依赖风险) | 等别人、依赖XX、卡在XX、等外部 | 建议跟进依赖方或制定备选方案，是否需要主动沟通？ |
+| DEPENDENCY (依赖风险) | 等别人、依赖 XX、卡在 XX、等外部 | 建议跟进依赖方或制定备选方案，是否需要主动沟通？ |
 | QUALITY (质量风险) | 没时间测试、先上线再说、质量可能有问题 | 提醒注意潜在的技术债务，建议预留修复时间 |
 
 识别到风险时，请：
 1. 明确告知用户识别到的风险类型
-2. 给出针对性的建议
-3. 建议创建风险预警提醒任务
+2. 给出针对性的建议**如果你没有足够的背景知识，请不要给出很通用的建议，没有意义**
 
-### 项目提醒任务创建引导
-以下场景建议引导用户创建提醒任务：
+**重要：输出格式要求**
+当识别到风险时，请在回复开头添加风险标记，格式如下：
+- 资源风险: [风险:RESOURCE]
+- 时间风险: [风险:TIME]
+- 依赖风险: [风险:DEPENDENCY]
+- 质量风险: [风险:QUALITY]
 
-1. **进度跟进提醒** - 当任务阻塞或延期时，建议创建定时提醒跟进进展
-2. **风险预警提醒** - 当识别到高风险时，建议创建延时提醒在风险发生前预警
-3. **里程碑提醒** - 当用户提及重要节点或截止日期时，建议创建定时提醒
-
-创建提醒任务示例话术：
-- "这个任务目前处于阻塞状态，是否需要我创建一个提醒任务，明天跟进一下进展？"
-- "识别到时间风险，是否需要我在截止日期前2天提醒你？"
-
+例如：
+[风险:TIME] 建议评估是否需要延期或削减范围，是否需要沟通调整截止日期？
 ---
 
 ## 工具调用规则
 
 ### 创建定时任务 (create_scheduled_task)
-当用户想要创建定时任务或同意创建提醒任务时调用。
+1. 当用户想要创建定时任务
+2. 当同意创建提醒任务时调用。
+3. 当你识别到任务风险时
 
 参数说明：
 - chatId: 如果用户没有指定，使用当前会话的 chatId
 - scheduleType:
   - "cron" - 周期性任务（每天、每周、每月）
-  - "delay" - 延时任务（X分钟后、X小时后）
+  - "delay" - 延时任务（X 分钟后、X 小时后）
 - cronExpression: 当 scheduleType 为 "cron" 时必填
   - 每天 09:00 -> "0 0 9 * * *"
   - 每周一 10:00 -> "0 0 10 * * 1"
 - delayMs: 当 scheduleType 为 "delay" 时必填
-  - 10分钟后 -> 600000
-  - 1小时后 -> 3600000
+  - 10 分钟后 -> 600000
+  - 1 小时后 -> 3600000
+- assigneeId: 可选，任务执行时需要@的人员 ID
+  - 如果消息中 mention 了某人，且任务与该人相关，使用 mention 的人员 ID
 
-### 查询用户信息 (query_user)
-当用户想要查询用户信息时调用。
+
+---
+
+## 静默模式规则
+
+**重要**: 为了减少群消息干扰，某些操作会进入"静默模式"：
+
+1. **任务创建静默**: 当调用 create_scheduled_task 工具创建任务时，如果工具返回空字符串，表示任务已创建但不需要发送确认消息。
+   - 此时**不要**主动解释或确认任务已创建
+   - 直接结束对话，不返回任何内容
+
+2. **静默场景识别**:
+   - 如果工具返回空字符串（两个双引号），表示静默模式
+   - 如果工具返回正常内容，则正常回复
+
+3. **示例**:
+   - 用户: "帮我创建一个每天 9 点的提醒"
+   - 工具返回: 空字符串
+   - 你的回复: 不回复任何内容
 
 ---
 
@@ -201,10 +229,34 @@ export class AiService {
     }
     const history = this.chatHistories.get(chatId)!;
 
+
+
+    // 构建 human message，如果有 senderId、mentionIds、messageId、parentId、rootId，添加到消息中
+    let humanMessageContent = query;
+    if (senderId) {
+      humanMessageContent += `\n\n[当前消息发送者的 ID: ${senderId}]`;
+    }
+    if (mentionIds && mentionIds.length > 0) {
+      humanMessageContent += `\n[当前消息中 mention 的人员 ID 列表：${mentionIds.join(', ')}]`;
+    }
+    if (messageId) {
+      humanMessageContent += `\n[当前消息ID: ${messageId}]`;
+    }
+    if (parentId) {
+      humanMessageContent += `\n[父消息ID: ${parentId}]`;
+    }
+    if (rootId) {
+      humanMessageContent += `\n[根消息ID: ${rootId}]`;
+    }
+    // 手动添加用户消息（只添加一次，避免循环中重复添加）
+    await history.addMessage(new HumanMessage(humanMessageContent));
+
+    
     while (true) {
+      
       // 执行对话
       const aiMessage = await this.chainWithMemory.invoke({
-        question: query
+        question: ''
       }, {
         configurable: {
           sessionId: chatId,
@@ -212,6 +264,7 @@ export class AiService {
       });
 
       const toolCalls = aiMessage.tool_calls ?? [];
+      
       // 如果没有工具调用，返回结果
       if (!toolCalls.length) {
         return aiMessage.content as string;
@@ -236,11 +289,10 @@ export class AiService {
         } else if (toolName === 'create_scheduled_task') {
           // 如果 AI 没有传入 chatId，使用默认的 chatId
           const args = toolCall.args as any;
-          if (!args.chatId && chatId) {
-            args.chatId = chatId;
-          }
-          const result = await this.createScheduledTaskTool.invoke(args);
 
+          args.chatId = chatId;
+        
+          const result = await this.createScheduledTaskTool.invoke(args);
           await history.addMessage(
             new ToolMessage({
               tool_call_id: toolCallId,

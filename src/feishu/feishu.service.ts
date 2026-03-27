@@ -9,6 +9,12 @@ export type EventHandler = (event: {
   chatId: string;
   text: string;
   docUrl?: string;
+  senderId?: string;
+  mentionIds?: string[];
+  mentions?: any[];
+  messageId?: string;
+  parentId?: string;
+  rootId?: string;
 }) => Promise<string>;
 
 @Injectable()
@@ -81,35 +87,37 @@ export class FeishuService {
   // 处理消息事件（统一处理@机器人和私聊）
   private async handleMessageEvent(event: any) {
     try {
-      console.log('stream', event)
-      const { message } = event.event || event;
+      const { message, sender } = event.event || event;
       if (!message) {
         console.warn('⚠️ 无效的事件数据');
         return;
       }
 
-      // 排除机器人自己发送的消息
-      const senderId = message.sender_id;
+      const senderId = sender.sender_id.open_id;
+      const mentions = message.mentions;
+      const mentionIds = message.mentions?.map(item => item.id.open_id) || [];
       const appId = this.configService.get('FEISHU_APP_ID') as string;
+      
+      
       if (senderId && senderId === appId) {
         console.log('🤖 跳过机器人自己发送的消息');
         return;
       }
-
+      console.log('event', message, message.quoted_message)
       const chatId = message.chat_id;
+      const messageId = message.message_id;
+      const parentId = message.parent_id;
+      const rootId = message.root_id;
       const content = JSON.parse(message.content);
       const text = content.text?.replace(/@_user_\d+/g, '').trim() || '';
-
-      console.log(`📩 收到消息：${text}`);
-
+      console.log(`📩 收到消息：${text}, messageId: ${messageId}, parentId: ${parentId}, rootId: ${rootId}`);
       // 提取文档链接
       const docUrl = text.match(/https:\/\/\S+?\.feishu\.cn\/\S+/)?.[0];
 
       // 先回复"思考中"，避免飞书 3 秒超时重推
-      await this.sendTextMessage(chatId, '🤔 正在思考中，请稍候...');
-
-      // 异步处理业务逻辑，不阻塞响应
-      this.processMessageAsync(chatId, text, docUrl).catch((err) => {
+      // await this.sendTextMessage(chatId, '🤔 正在思考中，请稍候...');
+      
+      this.processMessageAsync(chatId, text, docUrl, senderId, mentionIds, mentions, messageId, parentId, rootId).catch((err) => {
         console.error('异步处理消息失败:', err);
         this.sendTextMessage(chatId, '处理失败，请稍后重试！').catch(() => {});
       });
@@ -122,17 +130,25 @@ export class FeishuService {
   }
 
   // 异步处理消息业务逻辑
-  private async processMessageAsync(chatId: string, text: string, docUrl?: string) {
+  private async processMessageAsync(chatId: string, text: string, docUrl?: string, senderId?: string, mentionIds?: string[], mentions?: any[], messageId?: string, parentId?: string, rootId?: string) {
     if (this.eventHandler) {
-      const eventType = text.includes('@') ? 'mention' : 'private_message';
+      // 使用 mentionIds 判断是否@了机器人，而不是 text（因为@标签已被移除）
+      const eventType = mentionIds && mentionIds.length > 0 ? 'mention' : 'private_message';
       const reply = await this.eventHandler({
         type: eventType,
         chatId,
         text,
         docUrl,
+        senderId,
+        mentionIds,
+        mentions,
+        messageId,
+        parentId,
+        rootId,
       });
       // 发送最终结果
-      await this.sendTextMessage(chatId, reply);
+      console.log('最终结果', reply)
+      reply && await this.sendTextMessage(chatId, reply, mentionIds);
     } else {
       await this.sendTextMessage(chatId, '未配置事件处理器，无法处理消息。请检查配置。');
       console.warn('未配置事件处理器，无法处理消息。请检查配置。');
@@ -140,17 +156,25 @@ export class FeishuService {
   }
 
   // 发送文本消息到飞书
-  async sendTextMessage(chatId: string, content: string) {
+  async sendTextMessage(chatId: string, content: string, assigneeIds?: string[]) {
     try {
+      // 如果有 assigneeIds，在消息内容前添加多个@标签
+      const mentionTags = assigneeIds && assigneeIds.length > 0
+        ? assigneeIds.map(id => `<at user_id="${id}"></at>`).join('') + '\n'
+        : '';
+      const finalContent = mentionTags
+        ? `${mentionTags}${content}\n Power by chenjq`
+        : `${content}\n Power by chenjq`;
+      
       await (this.feishuClient).im.message.create({
         params: { receive_id_type: 'chat_id' },
         data: {
           receive_id: chatId,
-          content: JSON.stringify({ text: `${content}\n Power by chenjq` }),
+          content: JSON.stringify({ text: finalContent }),
           msg_type: 'text',
         },
       });
-      console.log('✅ 消息发送成功');
+      console.log('✅ 消息发送成功', content);
     } catch (err) {
       console.error('❌ 发送消息失败:', err);
     }

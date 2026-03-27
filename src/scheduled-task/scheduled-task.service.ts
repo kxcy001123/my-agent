@@ -3,6 +3,7 @@ import { ModuleRef } from '@nestjs/core';
 import { TaskRegistryService } from './task-registry.service';
 import { FeishuService } from '../feishu/feishu.service';
 import { CreateScheduledTaskInput, ScheduledTask, TaskExecutionResult } from './interfaces/scheduled-task.interface';
+import { NotificationPolicyService } from '../common/notification-policy.service';
 
 /**
  * 定时任务核心服务
@@ -14,12 +15,14 @@ export class ScheduledTaskService {
     private readonly moduleRef: ModuleRef,
     @Inject(forwardRef(() => FeishuService))
     private readonly feishuService: FeishuService,
+    private readonly notificationPolicyService: NotificationPolicyService,
   ) {}
 
   /**
    * 创建定时任务
    */
   async createTask(input: CreateScheduledTaskInput): Promise<ScheduledTask> {
+    
     // 创建执行回调函数
     const executeCallback = async () => {
       await this.executeTask(input);
@@ -27,6 +30,7 @@ export class ScheduledTaskService {
 
     // 注册任务
     const task = this.taskRegistry.createTask(input, executeCallback);
+    
 
     return task;
   }
@@ -50,7 +54,7 @@ export class ScheduledTaskService {
         );
       } else if (input.taskType === 'message_send') {
         // 发送飞书消息（兜底逻辑）
-        await this.feishuService.sendTextMessage(input.chatId!, input.messageContent!);
+        await this.feishuService.sendTextMessage(input.chatId!, input.messageContent!, input.assigneeIds);
         result = '消息发送成功';
       } else {
         throw new Error(`未知的任务类型：${input.taskType}`);
@@ -62,18 +66,18 @@ export class ScheduledTaskService {
       console.error(`定时任务执行失败：`, err);
     }
 
-    // 发送执行结果通知
-    // if (input.notifyResult !== false) {
-    //   await this.notifyExecutionResult(input, {
-    //     taskId: input.name, // 使用名称作为 ID 用于通知
-    //     taskName: input.name,
-    //     executedAt: new Date(),
-    //     success,
-    //     result,
-    //     error,
-    //     duration: Date.now() - startTime,
-    //   });
-    // }
+    // 发送执行结果通知（根据策略决定是否发送）
+    if (this.notificationPolicyService.shouldNotify('task_executed')) {
+      await this.notifyExecutionResult(input, {
+        taskId: input.name, // 使用名称作为 ID 用于通知
+        taskName: input.name,
+        executedAt: new Date(),
+        success,
+        result,
+        error,
+        duration: Date.now() - startTime,
+      });
+    }
   }
 
   /**
@@ -127,7 +131,7 @@ ${executionResult.error ? `错误信息：${executionResult.error}` : ''}
     // 发送到默认聊天 ID 或任务指定的聊天 ID
     const chatId = input.chatId;
     if (chatId) {
-      await this.feishuService.sendTextMessage(chatId, message);
+      await this.feishuService.sendTextMessage(chatId, message, input.assigneeIds);
     }
   }
 

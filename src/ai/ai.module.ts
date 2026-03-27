@@ -10,9 +10,11 @@ import z from 'zod';
 
 import { ScheduledTaskModule } from '../scheduled-task/scheduled-task.module';
 import { ScheduledTaskService } from '../scheduled-task/scheduled-task.service';
+import { CommonModule } from '../common/common.module';
+import { NotificationPolicyService } from '../common/notification-policy.service';
 
 @Module({
-  imports: [ScheduledTaskModule],
+  imports: [ScheduledTaskModule, CommonModule],
   controllers: [AiController],
   providers: [AiService, UserService, {
     provide: 'CHAT_MODEL',
@@ -62,11 +64,11 @@ import { ScheduledTaskService } from '../scheduled-task/scheduled-task.service';
     // 定时任务 Tool
     {
       provide: 'CREATE_SCHEDULED_TASK_TOOL',
-      useFactory: (scheduledTaskService: ScheduledTaskService) => {
+      useFactory: (scheduledTaskService: ScheduledTaskService, notificationPolicyService: NotificationPolicyService) => {
         const { createScheduledTaskTool } = require('../scheduled-task/tools/create-scheduled-task.tool');
-        return createScheduledTaskTool(scheduledTaskService);
+        return createScheduledTaskTool(scheduledTaskService, notificationPolicyService);
       },
-      inject: [ScheduledTaskService],
+      inject: [ScheduledTaskService, NotificationPolicyService],
     },
   ],
   exports: ['CHAT_MODEL', 'QUERY_USER_TOOL', 'CREATE_SCHEDULED_TASK_TOOL', AiService]

@@ -54,6 +54,8 @@ export interface ScheduledTask {
   cronJobName: string;
   /** 是否通知执行结果 */
   notifyResult?: boolean;
+  /** 任务关联的人员 ID 列表，用于@这些人 */
+  assigneeIds?: string[];
 }
 
 /**
@@ -71,6 +73,8 @@ export interface CreateScheduledTaskInput {
   messageContent?: string;
   chatId?: string;
   notifyResult?: boolean;
+  /** 可选，任务关联的人员 ID 列表 */
+  assigneeIds?: string[];
 }
 
 /**
