@@ -70,7 +70,25 @@ import { NotificationPolicyService } from '../common/notification-policy.service
       },
       inject: [ScheduledTaskService, NotificationPolicyService],
     },
+    // 取消定时任务 Tool
+    {
+      provide: 'CANCEL_SCHEDULED_TASK_TOOL',
+      useFactory: (scheduledTaskService: ScheduledTaskService, notificationPolicyService: NotificationPolicyService) => {
+        const { cancelScheduledTaskTool } = require('../scheduled-task/tools/cancel-scheduled-task.tool');
+        return cancelScheduledTaskTool(scheduledTaskService, notificationPolicyService);
+      },
+      inject: [ScheduledTaskService, NotificationPolicyService],
+    },
+    // 查询定时任务列表 Tool
+    {
+      provide: 'LIST_SCHEDULED_TASKS_TOOL',
+      useFactory: (scheduledTaskService: ScheduledTaskService) => {
+        const { listScheduledTasksTool } = require('../scheduled-task/tools/list-scheduled-tasks.tool');
+        return listScheduledTasksTool(scheduledTaskService);
+      },
+      inject: [ScheduledTaskService],
+    },
   ],
-  exports: ['CHAT_MODEL', 'QUERY_USER_TOOL', 'CREATE_SCHEDULED_TASK_TOOL', AiService]
+  exports: ['CHAT_MODEL', 'QUERY_USER_TOOL', 'CREATE_SCHEDULED_TASK_TOOL', 'CANCEL_SCHEDULED_TASK_TOOL', 'LIST_SCHEDULED_TASKS_TOOL', AiService]
 })
 export class AiModule { }

@@ -73,6 +73,8 @@ export class AiService {
     @Inject('CHAT_MODEL') model: ChatOpenAI,
     @Inject('QUERY_USER_TOOL') private readonly queryUserTool: any,
     @Inject('CREATE_SCHEDULED_TASK_TOOL') private readonly createScheduledTaskTool: any,
+    @Inject('CANCEL_SCHEDULED_TASK_TOOL') private readonly cancelScheduledTaskTool: any,
+    @Inject('LIST_SCHEDULED_TASKS_TOOL') private readonly listScheduledTasksTool: any,
   ) {
     this.winstonLogger = winstonLogger;
     this.logger = new Logger(AiService.name);
@@ -83,7 +85,7 @@ export class AiService {
     this.model = model;
     this.chain = prompt.pipe(model).pipe(new StringOutputParser());
 
-    this.tools = [this.createScheduledTaskTool]
+    this.tools = [this.createScheduledTaskTool, this.cancelScheduledTaskTool, this.listScheduledTasksTool]
     this.modelWithTools = model.bindTools(this.tools);
   }
 
@@ -109,6 +111,8 @@ export class AiService {
 
 ## 可用工具
 - create_scheduled_task: 创建定时任务或延时任务
+- cancel_scheduled_task: 取消/删除已创建的定时任务
+- list_scheduled_tasks: 查询当前已创建的定时任务列表
 
 ---
 
@@ -171,6 +175,41 @@ export class AiService {
 - assigneeId: 可选，任务执行时需要@的人员 ID
   - 如果消息中 mention 了某人，且任务与该人相关，使用 mention 的人员 ID
 
+### 取消定时任务 (cancel_scheduled_task)
+
+**触发场景**：
+1. **用户明确取消**：用户说"取消刚才的提醒"、"删除那个定时任务"、"不需要了"、"算了"等
+2. **问题已解决**：用户表示问题已经解决、任务已完成、情况有变等，导致之前创建的任务不再需要执行
+3. **上下文变化**：根据对话上下文，判断之前创建的任务已无执行必要
+
+**参数说明**：
+- taskId: 可选，要取消的任务 ID。如果用户明确提到了任务 ID，使用它
+- taskName: 可选，任务名称或名称关键词。根据上下文推断要取消的任务
+- reason: 可选，取消原因，如"问题已解决"、"用户取消"、"情况变化"等
+
+**示例**：
+- 用户："取消刚才的提醒" -> 调用 cancel_scheduled_task，taskName="刚才的提醒"
+- 用户："问题已经解决了，不用提醒了" -> 调用 cancel_scheduled_task，reason="问题已解决"
+- 用户："这个任务做完了" -> 调用 cancel_scheduled_task，taskName="任务名称", reason="任务已完成"
+
+### 查询任务列表 (list_scheduled_tasks)
+
+**触发场景**：
+1. **用户主动查询**：用户问"有哪些定时任务？"、"查看任务列表"、"当前有什么任务"
+2. **不确定任务 ID**：用户说"取消刚才的提醒"，但对话历史中有多个任务时，先查询列表确认
+3. **确认任务状态**：用户想确认任务是否已创建、是否已执行
+
+**参数说明**：
+- filterEnabled: 可选，过滤条件
+  - true - 只返回已启用的任务
+  - false - 只返回已禁用的任务
+  - 不传 - 返回所有任务
+
+**使用流程示例**：
+用户：取消刚才的提醒
+1. 如果有多个任务，先调用 list_scheduled_tasks 查询
+2. 返回任务列表后，让用户选择或根据上下文判断
+3. 再调用 cancel_scheduled_task 取消对应任务
 
 ---
 
@@ -300,6 +339,30 @@ export class AiService {
               content: typeof result === 'string' ? result : JSON.stringify(result),
             }),
           );
+        } else if (toolName === 'cancel_scheduled_task') {
+          // 取消定时任务
+          const args = toolCall.args as any;
+        
+          const result = await this.cancelScheduledTaskTool.invoke(args);
+          await history.addMessage(
+            new ToolMessage({
+              tool_call_id: toolCallId,
+              name: toolName,
+              content: typeof result === 'string' ? result : JSON.stringify(result),
+            }),
+          );
+        } else if (toolName === 'list_scheduled_tasks') {
+          // 查询定时任务列表
+          const args = toolCall.args as any;
+        
+          const result = await this.listScheduledTasksTool.invoke(args);
+          await history.addMessage(
+            new ToolMessage({
+              tool_call_id: toolCallId,
+              name: toolName,
+              content: typeof result === 'string' ? result : JSON.stringify(result),
+            }),
+          );
         }
       }
     }
@@ -316,6 +379,22 @@ export class AiService {
         评审结果：通过/不通过
         `),
       new HumanMessage(query),
+    ]
+
+    return this.model.pipe(new StringOutputParser()).invoke(messages)
+  }
+
+  async runReviewPrdChainWithMultimodal(content: any[]): Promise<string> {
+    const messages: BaseMessage[] = [
+      new SystemMessage(`你是一个 20 年经验的高级产品总监，并且有很强的工程研发背景，擅长进行产品架构规划，产品细节把控，对 prd 的评审有丰富的经验。请根据以下内容进行评审，并给出详细的评审意见。
+        你的输出格式是
+        评审意见
+        改进意见
+        评审结果：通过/不通过
+        
+        注意：输入内容可能包含文本和图片，请仔细分析图片中的 PRD 内容并进行评审。
+        `),
+      new HumanMessage({ content }),
     ]
 
     return this.model.pipe(new StringOutputParser()).invoke(messages)
@@ -340,20 +419,6 @@ export class AiService {
       const stream = await this.modelWithTools.stream(messages);
 
       let fullAIMessage: AIMessageChunk | null = null;
-
-      for await (const chunk of stream as AsyncIterable<AIMessageChunk>) {
-        // 使用 concat 持续拼接，得到本轮完整的 AIMessageChunk
-        fullAIMessage = fullAIMessage ? fullAIMessage.concat(chunk) : chunk;
-
-        const hasToolCallChunk =
-          !!fullAIMessage.tool_call_chunks &&
-          fullAIMessage.tool_call_chunks.length > 0;
-
-        // 只要当前轮次还没出现 tool 调用的 chunk，就可以把文本内容流式往外推
-        if (!hasToolCallChunk && chunk.content) {
-          yield chunk.content as string
-        }
-      }
 
       for await (const chunk of stream as AsyncIterable<AIMessageChunk>) {
         // 使用 concat 持续拼接，得到本轮完整的 AIMessageChunk

@@ -14,11 +14,13 @@ export class AutoTestService {
 
   async runTest(docUrl: string): Promise<string> {
     try {
-      // 1. 获取文档内容
-      const docContent = await this.feishuDocService.getDocContent(docUrl);
+      // 1. 获取文档内容（默认返回字符串格式）
+      const docContent = await this.feishuDocService.getDocContent(docUrl, false);
       console.log('docContent', docContent)
+      // 确保 docContent 是字符串类型
+      const contentStr = typeof docContent === 'string' ? docContent : JSON.stringify(docContent);
       // 2. AI 解析测试步骤
-      const testCase = await this.testStepParser.parse(docContent);
+      const testCase = await this.testStepParser.parse(contentStr);
       console.log('生成的测试用例', testCase)
       // 3. 执行测试
       const result = await this.playwrightService.execute(testCase);

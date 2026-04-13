@@ -45,6 +45,7 @@ export class NotificationPolicyService {
     const scenes: NotificationScene[] = [
       'task_created',
       'task_executed',
+      'task_cancelled',
       'risk_detected',
       'progress_update',
       'user_query',
